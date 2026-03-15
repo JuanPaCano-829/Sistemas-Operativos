@@ -1,85 +1,151 @@
-/* ==================================================================================
-   Examen Parcial - Ejercicio II) Memoria Compartida Linux
-   ================================================================================== */
+/* =============================================================== 
+   
+   =============================================================== */
 
+#include <sys/types.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
+#include <sys/wait.h> // For wait functions
+#include <limits.h>
+#include <time.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
-#include <sys/wait.h>
 #include <string.h>
-#include <time.h>
 
 #include "primos_fun.h"
 
+#define TAM_BLOQUE 200
+
 int main(int argc, char* argv[]) 
 {
-    int NUM_HIJOS = argc > 1 ? atoi(argv[1]) : 3;
-    int MODALIDAD = argc > 2 ? atoi(argv[2]) : 0;
-    
-    // 1. Crear la LLAVE única basada en un archivo existente (puedes usar "primos_fun.h")
-    key_t key = ftok("primos_fun.h", 65);
-    
-    // 2. Crear el SEGMENTO (1024 bytes es suficiente para 10 hijos x 100 bytes)
-    int shmid = shmget(key, 1024, 0666 | IPC_CREAT);
-    
-    // 3. ATTACH: El padre se conecta a la memoria
-    char *shared_mem = (char*) shmat(shmid, (void*)0, 0);
-
-    for(int hijo = 0; hijo < NUM_HIJOS; hijo++)
-    {
-        pid_t pid = fork();
-
-        if (pid == 0) // Proceso HIJO
-        {
-            // El hijo hereda el 'shmid' y la dirección 'shared_mem' por ser un fork()
-            int n_ini = 5 * (hijo + 1);
-            int n_fin = 5 * (hijo + 2);
-            char cad_res[100];
-            char final_sms[256];
-
-            long num_inicial = dos_a_la_n(n_ini) - 1L;
-            long num_final   = dos_a_la_n(n_fin) - 1L;
-
-            cantidad_de_primos(cad_res, 0, num_inicial, num_final);
-            sprintf(final_sms, "quienSoy:%d, %s", hijo, cad_res);
-
-            // 4. ESCRITURA CON OFFSET (Instrucción 127)
-            // Calculamos la posición: base + (hijo * 100)
-            char *posicion_escritura = shared_mem + (hijo * 100);
-            strcpy(posicion_escritura, final_sms);
-
-            // El hijo se desvía de la memoria antes de salir
-            shmdt(shared_mem);
-            exit(0);
-        }
-        else // Proceso PADRE
-        {
-            if (MODALIDAD == 0)
-            {
-                waitpid(pid, NULL, 0);
-                // El padre lee del cajón correspondiente al hijo actual
-                printf("Padre lee (Hijo %d): %s\n", hijo, shared_mem + (hijo * 100));
-            }
-        }
+    char hostname[HOST_NAME_MAX + 1];
+    if (gethostname(hostname, sizeof(hostname)) == -1) {
+        perror("gethostname failed");
+        exit(EXIT_FAILURE);
     }
-
-    if (MODALIDAD == 1)
+    printf("Computadora: %s\n", hostname);
+    
+    if(argc == 1)
     {
-        printf("Esperando a todos los hijos (Al final)...\n");
-        for (int i = 0; i < NUM_HIJOS; i++) wait(NULL);
-        
-        for (int i = 0; i < NUM_HIJOS; i++)
-        {
-            // El padre recorre el "pizarrón" leyendo cada 100 bytes
-            printf("Lectura Memoria Offset %d: %s\n", i * 100, shared_mem + (i * 100));
-        }
+      printf("-----------------------------------------------\n");
+      printf("uso:\n");
+      printf(" %s num_HIJOS MODALIDAD_OUT_LOOP\n",argv[0]);
+      printf("ejemplo: (valores por default)\n");
+      printf("-----------------------------------------------\n");
     }
+	
+    int int_deltaT;
 
-    // 5. LIMPIEZA FINAL
-    shmdt(shared_mem);
-    shmctl(shmid, IPC_RMID, NULL); // Borrar el segmento del sistema
+    int NUM_HIJOS;
+    int MODALIDAD_OUT_LOOP;
+    clock_t start, end;
+    struct timespec elapsed_start, elapsed_end;
+    double cpu_time_used;
+    double elapsed_time;
+	
+    char cad[10]; 
+    int hijo;
+    int n_ini, n_fin;
+    
+    NUM_HIJOS          = argc > 1 ? atoi(argv[1]) : 5;
+    MODALIDAD_OUT_LOOP = argc > 2 ? atoi(argv[2]) : 0;
 
+    if(NUM_HIJOS > 10)
+    {
+      printf("NUM_HIJOS debe ser <= 10\n");
+      return 1;
+    }
+	
+    pid_t* arr_pid = (pid_t*)(malloc(NUM_HIJOS*sizeof(pid_t)));
+    pid_t pid_fin;
+
+    key_t key = ftok("text", 60);
+    int shmid = shmget(key, NUM_HIJOS * TAM_BLOQUE, 0666 | IPC_CREAT);
+    char* shm = (char*) shmat(shmid, (void*)0, 0);
+	
+    start         = clock();
+    clock_gettime(CLOCK_REALTIME, &elapsed_start);
+	
+    for(hijo = 0; hijo < NUM_HIJOS ; hijo++)
+    {
+      // =====================================================
+      //                        fork()
+      // =====================================================
+      arr_pid[hijo] = fork();
+      // =====================================================
+      if (arr_pid[hijo] == -1) 
+      {
+          perror("fork failed");
+          exit(EXIT_FAILURE);
+      }
+
+      if (arr_pid[hijo] == 0) 
+      {   
+          // proceso hijo...
+          int quienSoy = hijo;
+          int n_ini    = 5 * ( hijo + 1);
+          int n_fin    = 5 * ( hijo + 2);
+          int IMPRIME  = 0; 
+          
+          long num_inicial = dos_a_la_n(n_ini) -1L; 
+          long num_final   = dos_a_la_n(n_fin) -1L; 
+
+          char cad_res[100];
+          char final_sms[TAM_BLOQUE];
+
+          cantidad_de_primos(cad_res,IMPRIME,num_inicial,num_final);
+          sprintf(final_sms, "quienSoy:%d, %s", quienSoy, cad_res);
+
+          strcpy(shm + quienSoy * TAM_BLOQUE, final_sms);
+
+		  exit(0);
+      }
+      else
+      {
+        if(MODALIDAD_OUT_LOOP == 0)
+        {
+	  // This is the parent process
+          waitpid(arr_pid[hijo], NULL, 0); // Wait for the child to finish
+          printf("%s\n", shm + hijo * TAM_BLOQUE);
+         }
+      }
+    }  // del for para los forks()
+	
+    if(MODALIDAD_OUT_LOOP)
+    {
+      for( hijo = 0; hijo < NUM_HIJOS; hijo++)
+      {
+        pid_fin = wait(0);
+      }
+
+      for( hijo = 0; hijo < NUM_HIJOS; hijo++)
+      {
+        printf("%s\n", shm + hijo * TAM_BLOQUE);
+      }
+         
+    }     
+	
+    end = clock();
+    clock_gettime(CLOCK_REALTIME, &elapsed_end);
+    cpu_time_used = ((double)end - start) / CLOCKS_PER_SEC;
+    elapsed_time  = (elapsed_end.tv_sec  - elapsed_start.tv_sec) + 
+                    (elapsed_end.tv_nsec - elapsed_start.tv_nsec) / 1e9;
+	
+    printf("-------------------------------------------------\n");
+    printf("         %s\n",argv[0]);
+    printf("-------------------------------------------------\n");	
+    printf("NUM_HIJOS:          %d\n",NUM_HIJOS);
+    printf("MODALIDAD_OUT_LOOP: %d\n",MODALIDAD_OUT_LOOP);
+    printf("CPU Time:           %f seg.\n",cpu_time_used);
+    printf("Elapsed time:       %f sec.\n",elapsed_time);
+
+    shmdt(shm);
+    shmctl(shmid, IPC_RMID, NULL);
+    free(arr_pid);
+	
     return 0;
 }
+// ===========================================================================
+//                             Fin del Codigo
+// ===========================================================================

@@ -1,117 +1,199 @@
-/* ==================================================================================
-   Examen Parcial - Ejercicio III) Pipes Windows (API Nativa Win32)
-   Mecanismo: Comunicación mediante tuberías con herencia de Handles.
-   ================================================================================== */
+/* ===============================================================
+   VERSION WINDOWS con pipes
+   =============================================================== */
 
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include <string.h>
+#include <stdint.h>
 
-// Prototipos de las funciones matemáticas (viven en primos_fun_sep.c)
-long dos_a_la_n(int n);
-void cantidad_de_primos(char* cad_res, int IMPRIME, long num_inicial, long num_final);
+#include "primos_fun.h"
 
-int main(int argc, char *argv[]) {
-    // Desactivamos el buffer para ver los mensajes en PowerShell de inmediato
-    setvbuf(stdout, NULL, _IONBF, 0);
+int main(int argc, char* argv[])
+{
+    if (argc > 1 && strcmp(argv[1], "child") == 0)
+    {
+        int quienSoy = atoi(argv[2]);
+        int IMPRIME  = atoi(argv[3]);
+        int n_ini    = atoi(argv[4]);
+        int n_fin    = atoi(argv[5]);
+        HANDLE hWrite = (HANDLE)(uintptr_t)_strtoui64(argv[6], NULL, 10);
 
-    /* Si el programa tiene menos de 3 argumentos, es el PADRE.
-       Si tiene exactamente los argumentos que pasamos en CreateProcess, es el HIJO.
-    */
-    if (argc < 4) { 
-        // --- SECCIÓN DEL PADRE ---
-        int NUM_HIJOS = (argc > 1) ? atoi(argv[1]) : 3;
-        int MODALIDAD = (argc > 2) ? atoi(argv[2]) : 0;
-        
+        long num_inicial = dos_a_la_n(n_ini) - 1L;
+        long num_final   = dos_a_la_n(n_fin) - 1L;
+
+        char cad_res[100];
+        char final_sms[200];
+        DWORD bytesWritten;
+
+        cantidad_de_primos(cad_res, IMPRIME, num_inicial, num_final);
+        sprintf(final_sms, "quienSoy:%d, %s", quienSoy, cad_res);
+
+        WriteFile(hWrite, final_sms, (DWORD)(strlen(final_sms) + 1), &bytesWritten, NULL);
+        CloseHandle(hWrite);
+        return 0;
+    }
+
+    char hostname[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD size = MAX_COMPUTERNAME_LENGTH + 1;
+
+    if (!GetComputerNameA(hostname, &size)) {
+        fprintf(stderr, "GetComputerName failed (%lu)\n", GetLastError());
+        exit(EXIT_FAILURE);
+    }
+    printf("Computadora: %s\n", hostname);
+
+    if (argc == 1) {
+        printf("-----------------------------------------------\n");
+        printf("uso:\n");
+        printf(" %s num_HIJOS MODALIDAD_OUT_LOOP\n", argv[0]);
+        printf("ejemplo: (valores por default)\n");
+        printf("-----------------------------------------------\n");
+    }
+
+    int NUM_HIJOS;
+    int MODALIDAD_OUT_LOOP;
+
+    clock_t start, end;
+    double cpu_time_used;
+    double elapsed_time;
+
+    int hijo;
+
+    NUM_HIJOS          = argc > 1 ? atoi(argv[1]) : 5;
+    MODALIDAD_OUT_LOOP = argc > 2 ? atoi(argv[2]) : 0;
+
+    if (NUM_HIJOS > 10) {
+        printf("NUM_HIJOS debe ser <= 10\n");
+        return 1;
+    }
+
+    PROCESS_INFORMATION* arr_pi =
+        (PROCESS_INFORMATION*)malloc(NUM_HIJOS * sizeof(PROCESS_INFORMATION));
+
+    HANDLE* arr_read =
+        (HANDLE*)malloc(NUM_HIJOS * sizeof(HANDLE));
+
+    LARGE_INTEGER freq, t1, t2;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&t1);
+    start = clock();
+
+    for (hijo = 0; hijo < NUM_HIJOS; hijo++)
+    {
         HANDLE hRead, hWrite;
-        HANDLE hHijos[10]; 
-        SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE }; // Permite heredar el Pipe
+        SECURITY_ATTRIBUTES sa;
 
-        // 1. Crear el Pipe
+        sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+        sa.lpSecurityDescriptor = NULL;
+        sa.bInheritHandle = TRUE;
+
         if (!CreatePipe(&hRead, &hWrite, &sa, 0)) {
-            printf("Error al crear el pipe.\n");
-            return 1;
+            fprintf(stderr, "CreatePipe failed (%lu)\n", GetLastError());
+            exit(EXIT_FAILURE);
         }
 
-        // El extremo de lectura NO debe ser heredado por el hijo
-        SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+        arr_read[hijo] = hRead;
 
-        printf("Computadora: JuanPa (Padre lanzando %d hijos)\n", NUM_HIJOS);
+        STARTUPINFOA si;
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
 
-        for (int i = 0; i < NUM_HIJOS; i++) {
-            STARTUPINFO si = { sizeof(si) };
-            PROCESS_INFORMATION pi;
-            char comando[512];
-            
-            // Pasamos los argumentos según la rúbrica: ID, n_ini, n_fin, IMPRIME, Handle
-            sprintf(comando, "%s %d %d %d %d %p", 
-                    argv[0], i, 5*(i+1), 5*(i+2), 0, hWrite);
-            
-            // 2. Lanzar el proceso hijo
-            if (!CreateProcess(NULL, comando, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
-                printf("Error al crear hijo %d\n", i);
-                continue;
-            }
-            hHijos[i] = pi.hProcess;
-            CloseHandle(pi.hThread); 
+        ZeroMemory(&arr_pi[hijo], sizeof(PROCESS_INFORMATION));
 
-            // Modalidad 0: Espera secuencial
-            if (MODALIDAD == 0) {
-                WaitForSingleObject(pi.hProcess, INFINITE);
-                char buf[256]; DWORD leidos;
-                if (ReadFile(hRead, buf, 256, &leidos, NULL)) {
-                    printf("%s\n", buf);
-                }
+        {
+            char cmd[512];
+            int n_ini   = 5 * (hijo + 1);
+            int n_fin   = 5 * (hijo + 2);
+            int IMPRIME = 0;
+
+            sprintf(cmd, "\"%s\" child %d %d %d %d %llu",
+                    argv[0],
+                    hijo,
+                    IMPRIME,
+                    n_ini,
+                    n_fin,
+                    (unsigned long long)(uintptr_t)hWrite);
+
+            if (!CreateProcessA(
+                    NULL,
+                    cmd,
+                    NULL,
+                    NULL,
+                    TRUE,
+                    0,
+                    NULL,
+                    NULL,
+                    &si,
+                    &arr_pi[hijo]))
+            {
+                fprintf(stderr, "CreateProcess failed (%lu)\n", GetLastError());
+                exit(EXIT_FAILURE);
             }
         }
 
-        // --- CAMBIO CRÍTICO DE SINCRONIZACIÓN ---
-        // El padre DEBE cerrar su copia de escritura. Si no, ReadFile se bloquea
-        // esperando que alguien más (el padre) escriba en el tubo.
         CloseHandle(hWrite);
 
-        // Modalidad 1: Esperar a todos al final
-        if (MODALIDAD == 1) {
-            printf("Esperando por mis hijos (Al final)...\n");
-            // Sincronización: esperamos a que todos los procesos terminen sus cálculos
-            WaitForMultipleObjects(NUM_HIJOS, hHijos, TRUE, INFINITE); 
-            
-            for (int i = 0; i < NUM_HIJOS; i++) {
-                char recibe_sms[256];
-                DWORD leidos;
-                // Leemos los resultados que los hijos dejaron en el pipe
-                if (ReadFile(hRead, recibe_sms, sizeof(recibe_sms), &leidos, NULL)) {
-                    printf("%s\n", recibe_sms);
-                }
-                CloseHandle(hHijos[i]);
+        if (MODALIDAD_OUT_LOOP == 0)
+        {
+            DWORD bytesRead;
+            char buffer[256];
+
+            WaitForSingleObject(arr_pi[hijo].hProcess, INFINITE);
+
+            ZeroMemory(buffer, sizeof(buffer));
+            if (ReadFile(arr_read[hijo], buffer, sizeof(buffer) - 1, &bytesRead, NULL)) {
+                buffer[bytesRead] = '\0';
+                printf("%s\n", buffer);
             }
+
+            CloseHandle(arr_read[hijo]);
+            CloseHandle(arr_pi[hijo].hProcess);
+            CloseHandle(arr_pi[hijo].hThread);
         }
-        CloseHandle(hRead);
-
-    } else { 
-        // --- SECCIÓN DEL HIJO ---
-        int id = atoi(argv[1]);
-        int n_ini = atoi(argv[2]);
-        int n_fin = atoi(argv[3]);
-        int IMPRIME = atoi(argv[4]);
-        HANDLE hW = (HANDLE)strtoll(argv[5], NULL, 16); // Recuperar el Handle
-
-        long num_ini = dos_a_la_n(n_ini) - 1L;
-        long num_fin = dos_a_la_n(n_fin) - 1L;
-        char cad_res[100], final_sms[256];
-        DWORD escritos;
-
-        // Cálculo de la cantidad de primos
-        cantidad_de_primos(cad_res, IMPRIME, num_ini, num_fin);
-        
-        // Formatear mensaje según instrucción 25 y 26
-        sprintf(final_sms, "quienSoy:%d, %s", id, cad_res);
-
-        // Enviar respuesta al padre a través del pipe
-        WriteFile(hW, final_sms, (DWORD)strlen(final_sms) + 1, &escritos, NULL);
-        CloseHandle(hW); 
-        exit(0);
     }
+
+    if (MODALIDAD_OUT_LOOP)
+    {
+        printf("Esperando por mis hijos...\n");
+
+        for (hijo = 0; hijo < NUM_HIJOS; hijo++)
+        {
+            DWORD bytesRead;
+            char buffer[256];
+
+            WaitForSingleObject(arr_pi[hijo].hProcess, INFINITE);
+
+            ZeroMemory(buffer, sizeof(buffer));
+            if (ReadFile(arr_read[hijo], buffer, sizeof(buffer) - 1, &bytesRead, NULL)) {
+                buffer[bytesRead] = '\0';
+                printf("%s\n", buffer);
+            }
+
+            CloseHandle(arr_read[hijo]);
+            CloseHandle(arr_pi[hijo].hProcess);
+            CloseHandle(arr_pi[hijo].hThread);
+        }
+    }
+
+    end = clock();
+    QueryPerformanceCounter(&t2);
+
+    cpu_time_used = ((double)end - start) / CLOCKS_PER_SEC;
+    elapsed_time  = (double)(t2.QuadPart - t1.QuadPart) / (double)freq.QuadPart;
+
+    printf("-------------------------------------------------\n");
+    printf("         %s\n", argv[0]);
+    printf("-------------------------------------------------\n");
+    printf("NUM_HIJOS:          %d\n", NUM_HIJOS);
+    printf("MODALIDAD_OUT_LOOP: %d\n", MODALIDAD_OUT_LOOP);
+    printf("CPU Time:           %f seg.\n", cpu_time_used);
+    printf("Elapsed time:       %f sec.\n", elapsed_time);
+
+    free(arr_pi);
+    free(arr_read);
+
     return 0;
 }

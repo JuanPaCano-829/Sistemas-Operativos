@@ -1,39 +1,230 @@
+/* ===============================================================  
+   
+   =============================================================== */
+
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <string.h>
+#include <stdint.h>
 
-long dos_a_la_n(int n);
-void cantidad_de_primos(char* cad_res, int IMPRIME, long num_inicial, long num_final);
+#include "primos_fun.h"
 
-int main(int argc, char *argv[]) {
-    TCHAR szName[] = TEXT("Local\\MemPrimos188653");
-    if (argc <= 1) { // PADRE
-        int NUM = 3; 
-        HANDLE hMap = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, 1024, szName);
-        char* pBuf = (char*)MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, 1024);
-        HANDLE hH[10];
+#define TAM_BLOQUE 200
 
-        for (int i = 0; i < NUM; i++) {
-            STARTUPINFO si = {sizeof(si)}; PROCESS_INFORMATION pi;
-            char cmd[512]; sprintf(cmd, "%s %d", argv[0], i);
-            CreateProcess(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
-            hH[i] = pi.hProcess;
-            if (i == 0) { // Ejemplo Modalidad 0 simplificada
-                WaitForSingleObject(pi.hProcess, INFINITE);
-                printf("%s\n", pBuf + (i*100));
-            }
+int main(int argc, char* argv[]) 
+{
+    if (argc > 1 && strcmp(argv[1], "child") == 0)
+    {
+        int quienSoy = atoi(argv[2]);
+        int IMPRIME  = atoi(argv[3]);
+        int n_ini    = atoi(argv[4]);
+        int n_fin    = atoi(argv[5]);
+
+        HANDLE hMapFile;
+        char* pBuf;
+
+        hMapFile = OpenFileMappingA(
+                        FILE_MAP_ALL_ACCESS,
+                        FALSE,
+                        "MiMemoriaCompartida");
+
+        if (hMapFile == NULL)
+        {
+            printf("Could not open file mapping object (%lu).\n", GetLastError());
+            return 1;
         }
-        // ... (Lógica de espera similar al de Pipes Windows)
-        UnmapViewOfFile(pBuf); CloseHandle(hMap);
-    } else { // HIJO
-        int id = atoi(argv[1]);
-        HANDLE hM = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, szName);
-        char* p = (char*)MapViewOfFile(hM, FILE_MAP_ALL_ACCESS, 0, 0, 1024);
-        char res[100], sms[256];
-        cantidad_de_primos(res, 0, dos_a_la_n(5*(id+1))-1, dos_a_la_n(5*(id+2))-1);
-        sprintf(sms, "quienSoy:%d, %s", id, res);
-        CopyMemory(p + (id*100), sms, strlen(sms)+1);
-        UnmapViewOfFile(p); CloseHandle(hM);
-        exit(0);
+
+        pBuf = (char*) MapViewOfFile(
+                    hMapFile,
+                    FILE_MAP_ALL_ACCESS,
+                    0,
+                    0,
+                    TAM_BLOQUE * 10);
+
+        if (pBuf == NULL)
+        {
+            printf("Could not map view of file (%lu).\n", GetLastError());
+            CloseHandle(hMapFile);
+            return 1;
+        }
+
+        long num_inicial = dos_a_la_n(n_ini) -1L; 
+        long num_final   = dos_a_la_n(n_fin) -1L; 
+
+        char cad_res[100];
+        char final_sms[TAM_BLOQUE];
+
+        cantidad_de_primos(cad_res,IMPRIME,num_inicial,num_final);
+        sprintf(final_sms, "quienSoy:%d, %s", quienSoy, cad_res);
+
+        CopyMemory((PVOID)(pBuf + quienSoy * TAM_BLOQUE), final_sms, strlen(final_sms) + 1);
+
+        UnmapViewOfFile(pBuf);
+        CloseHandle(hMapFile);
+
+        return 0;
     }
+
+    char hostname[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD size = MAX_COMPUTERNAME_LENGTH + 1;
+
+    if (!GetComputerNameA(hostname, &size)) {
+        printf("GetComputerName failed (%lu)\n", GetLastError());
+        exit(EXIT_FAILURE);
+    }
+    printf("Computadora: %s\n", hostname);
+    
+    if(argc == 1)
+    {
+      printf("-----------------------------------------------\n");
+      printf("uso:\n");
+      printf(" %s num_HIJOS MODALIDAD_OUT_LOOP\n",argv[0]);
+      printf("ejemplo: (valores por default)\n");
+      printf("-----------------------------------------------\n");
+    }
+	
+    int int_deltaT;
+
+    int NUM_HIJOS;
+    int MODALIDAD_OUT_LOOP;
+    clock_t start, end;
+    double cpu_time_used;
+    double elapsed_time;
+	
+    char cad[10]; 
+    int hijo;
+    int n_ini, n_fin;
+    
+    NUM_HIJOS          = argc > 1 ? atoi(argv[1]) : 5;
+    MODALIDAD_OUT_LOOP = argc > 2 ? atoi(argv[2]) : 0;
+
+    PROCESS_INFORMATION* arr_pi = (PROCESS_INFORMATION*)malloc(NUM_HIJOS * sizeof(PROCESS_INFORMATION));
+
+    HANDLE hMapFile;
+    char* pBuf;
+
+    hMapFile = CreateFileMappingA(
+                    INVALID_HANDLE_VALUE,
+                    NULL,
+                    PAGE_READWRITE,
+                    0,
+                    TAM_BLOQUE * 10,
+                    "MiMemoriaCompartida");
+
+    if (hMapFile == NULL)
+    {
+        printf("Could not create file mapping object (%lu).\n", GetLastError());
+        return 1;
+    }
+
+    pBuf = (char*) MapViewOfFile(
+                hMapFile,
+                FILE_MAP_ALL_ACCESS,
+                0,
+                0,
+                TAM_BLOQUE * 10);
+
+    if (pBuf == NULL)
+    {
+        printf("Could not map view of file (%lu).\n", GetLastError());
+        CloseHandle(hMapFile);
+        return 1;
+    }
+
+    LARGE_INTEGER freq, t1, t2;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&t1);
+    start = clock();
+	
+    for(hijo = 0; hijo < NUM_HIJOS ; hijo++)
+    {
+      STARTUPINFOA si;
+      ZeroMemory(&si, sizeof(si));
+      si.cb = sizeof(si);
+
+      ZeroMemory(&arr_pi[hijo], sizeof(PROCESS_INFORMATION));
+
+      {
+          char cmd[512];
+          int n_ini   = 5 * ( hijo + 1);
+          int n_fin   = 5 * ( hijo + 2);
+          int IMPRIME = 0;
+
+          sprintf(cmd, "\"%s\" child %d %d %d %d",
+                  argv[0],
+                  hijo,
+                  IMPRIME,
+                  n_ini,
+                  n_fin);
+
+          if (!CreateProcessA(
+                  NULL,
+                  cmd,
+                  NULL,
+                  NULL,
+                  FALSE,
+                  0,
+                  NULL,
+                  NULL,
+                  &si,
+                  &arr_pi[hijo]))
+          {
+              printf("CreateProcess failed (%lu)\n", GetLastError());
+              exit(EXIT_FAILURE);
+          }
+      }
+
+      if(MODALIDAD_OUT_LOOP == 0)
+      {
+          WaitForSingleObject(arr_pi[hijo].hProcess, INFINITE);
+          printf("%s\n", pBuf + hijo * TAM_BLOQUE);
+          CloseHandle(arr_pi[hijo].hProcess);
+          CloseHandle(arr_pi[hijo].hThread);
+      }
+
+    }  // del for para los procesos hijos
+	
+    if(MODALIDAD_OUT_LOOP)
+    {
+      printf("Esperando por mis hijos...\n");
+         
+      for( hijo = 0; hijo < NUM_HIJOS; hijo++)
+      {
+        WaitForSingleObject(arr_pi[hijo].hProcess, INFINITE);
+        printf("terminó hijo con p_id %lu\n", (unsigned long)arr_pi[hijo].dwProcessId);
+        CloseHandle(arr_pi[hijo].hProcess);
+        CloseHandle(arr_pi[hijo].hThread);
+      }
+
+      for( hijo = 0; hijo < NUM_HIJOS; hijo++)
+      {
+        printf("%s\n", pBuf + hijo * TAM_BLOQUE);
+      }
+         
+    }     
+	
+    end = clock();
+    QueryPerformanceCounter(&t2);
+
+    cpu_time_used = ((double)end - start) / CLOCKS_PER_SEC;
+    elapsed_time  = (double)(t2.QuadPart - t1.QuadPart) / (double)freq.QuadPart;
+	
+    printf("-------------------------------------------------\n");
+    printf("         %s\n",argv[0]);
+    printf("-------------------------------------------------\n");	
+    printf("NUM_HIJOS:          %d\n",NUM_HIJOS);
+    printf("MODALIDAD_OUT_LOOP: %d\n",MODALIDAD_OUT_LOOP);
+    printf("CPU Time:           %f seg.\n",cpu_time_used);
+    printf("Elapsed time:       %f sec.\n",elapsed_time);
+
+    UnmapViewOfFile(pBuf);
+    CloseHandle(hMapFile);
+    free(arr_pi);
+	
     return 0;
 }
+// ===========================================================================
+//                             Fin del Codigo
+// ===========================================================================
