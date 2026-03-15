@@ -64,20 +64,6 @@ int main(int argc, char* argv[])
 	
     for(hijo = 0; hijo < NUM_HIJOS ; hijo++)
     {
-      // =====================================================
-      //                        fork()
-      // =====================================================
-      arr_pid[hijo] = fork();
-      // =====================================================
-      if (arr_pid[hijo] == -1) 
-      {
-          perror("fork failed");
-          exit(EXIT_FAILURE);
-      }
-
-      if (arr_pid[hijo] == 0) 
-      {   
-          // proceso hijo...
           int n_ini   = 5 * ( hijo + 1);
           int n_fin   = 5 * ( hijo + 2);
           int IMPRIME = 0; 
@@ -99,20 +85,13 @@ int main(int argc, char* argv[])
   
           printf("hijo:%d, %s --- %s\n",hijo,argv[0],cad_res);
 
-		  exit(0);
-      }
-      else
-      {
-        if(MODALIDAD_OUT_LOOP == 0)
-        {
-	  // This is the parent process
-          printf("Parent process (PID %d) got child PID: %d\n", (int)getpid(), (int)arr_pid[hijo]);
-	  // The parent can then use the child_pid for actions like waiting or sending signals
-	  waitpid(arr_pid[hijo], NULL, 0); // Wait for the child to finish
-          printf("%s\n", shm + hijo * TAM_BLOQUE);
-	  printf("Child process %d finished.\n", (int)arr_pid[hijo]);
-         }
-      }
+          if(MODALIDAD_OUT_LOOP == 0)
+          {
+              printf("Parent process (PID %d) got child PID: %d\n", (int)getpid(), (int)getpid());
+              printf("%s\n", shm + hijo * TAM_BLOQUE);
+              printf("Child process %d finished.\n", (int)getpid());
+          }
+
     }  // del for para los forks()
 	
     if(MODALIDAD_OUT_LOOP)
@@ -121,10 +100,7 @@ int main(int argc, char* argv[])
          
       for( hijo = 0; hijo < NUM_HIJOS; hijo++)
       {
-        //waitpid(arr_pid[hijo], NULL, 0); // Wait for the child to finish			
-        //printf("Proceso hijo[%d] con p_id %d ha finalizado.\n", hijo,(int)arr_pid[hijo]);
-        pid_fin = wait(0);
-        printf("terminó hijo con p_id %d\n",pid_fin); 
+        printf("terminó hijo con p_id %d\n",(int)getpid()); 
       }
 
       for( hijo = 0; hijo < NUM_HIJOS; hijo++)
